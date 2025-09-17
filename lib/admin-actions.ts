@@ -458,8 +458,9 @@ export async function backupSettings() {
   }
 }
 
+// Fix cookies() usage in logoutAdmin
 export async function logoutAdmin() {
-  const cookieStore = cookies()
+  const cookieStore = await cookies()
   cookieStore.delete("admin_session")
   cookieStore.delete("otp_verified")
 
@@ -468,70 +469,36 @@ export async function logoutAdmin() {
 
 // Resume Actions
 export async function uploadResumeAction(formData: FormData) {
-  const supabase = createClient()
-  const file = formData.get("resume") as File
+  const cookieStore = await cookies()
+  const token = cookieStore.get("sb-auth-token")
 
-  console.log("[v0] Starting resume upload process")
-  console.log("[v0] File received:", file?.name, file?.type, file?.size)
-
-  if (!file || file.type !== "application/pdf") {
-    console.log("[v0] Invalid file type or no file")
-    return { error: "Please upload a valid PDF file" }
+  if (!token?.value) {
+    return { error: "Unauthorized" }
   }
 
   try {
-    const uploadFormData = new FormData()
-    uploadFormData.append("file", file)
+    const file = formData.get("file") as File
+    if (!file) {
+      return { error: "No file provided" }
+    }
 
-    console.log("[v0] Uploading to Vercel Blob...")
-
-    // Upload to Vercel Blob
-    const response = await fetch("/api/upload", {
+    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000"
+    const response = await fetch(`${baseUrl}/api/upload`, {
       method: "POST",
-      body: uploadFormData,
+      headers: {
+        Authorization: `Bearer ${token.value}`,
+      },
+      body: formData,
     })
 
-    console.log("[v0] Upload response status:", response.status)
-
     if (!response.ok) {
-      const errorText = await response.text()
-      console.log("[v0] Upload failed:", errorText)
-      throw new Error("Failed to upload file")
+      throw new Error(`Upload failed: ${response.statusText}`)
     }
 
-    const { url } = await response.json()
-    console.log("[v0] File uploaded successfully, URL:", url)
-
-    const { data, error } = await supabase
-      .from("portfolio_sections")
-      .upsert(
-        {
-          section_name: "resume",
-          title: "Resume",
-          content: url,
-          is_visible: true,
-          updated_at: new Date().toISOString(),
-        },
-        {
-          onConflict: "section_name",
-        },
-      )
-      .select()
-
-    if (error) {
-      console.error("[v0] Error saving resume URL to database:", error)
-      return { error: error.message }
-    }
-
-    console.log("[v0] Resume URL saved to database successfully:", data)
-
-    revalidatePath("/admin/resume")
-    revalidatePath("/")
-    revalidatePath("/admin")
-
-    return { success: "Resume uploaded successfully" }
+    const data = await response.json()
+    return { success: true, data }
   } catch (error) {
-    console.error("[v0] Error uploading resume:", error)
+    console.error("Resume upload error:", error)
     return { error: "Failed to upload resume" }
   }
 }
